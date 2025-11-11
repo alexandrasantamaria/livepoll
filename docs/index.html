@@ -1,63 +1,73 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Quiz P2P de Clase</title>
+  <title>Quiz P2P de Clase (mínimo)</title>
 
-  <!-- React + Babel + Tailwind -->
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
 
   <!-- PeerJS -->
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
-  <!-- Fuente -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
   <style>
-    body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
-    .fade-in { animation: fadeIn 0.3s ease-in; }
-    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#f5f5f7; }
+    .wrap { max-width: 880px; margin: 32px auto; background:#fff; border-radius: 12px; padding: 24px; box-shadow: 0 6px 20px rgba(0,0,0,.06); }
+    h1 { margin: 0 0 8px; font-size: 22px; }
+    .muted { color:#666; font-size:14px; margin-bottom:16px; }
+    .row { display:flex; gap:12px; margin: 10px 0; align-items: center; }
+    input[type=text], textarea { padding:10px 12px; border:1px solid #ccc; border-radius:8px; outline:none; flex:1; font-size:16px; }
+    button { padding:10px 14px; border:0; background:#2563eb; color:#fff; border-radius:8px; cursor:pointer; }
+    button.secondary { background:#10b981; }
+    button.danger { background:#ef4444; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .card { border:1px solid #eee; border-radius:10px; padding:14px; margin:12px 0; background:#fafafa; }
+    .chip { background:#eef2ff; color:#3730a3; padding:4px 8px; border-radius:6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight:700; letter-spacing:1px; }
+    .error { background:#fef2f2; color:#b91c1c; padding:10px; border-radius:8px; margin-top:10px; white-space:pre-wrap; }
+    .ok { color:#059669; font-weight:600; }
+    .list > div { padding:8px 0; border-bottom:1px dashed #e5e7eb; }
+    .list > div:last-child { border-bottom:0; }
+    .small { font-size:13px; color:#555; }
   </style>
 </head>
 <body>
-  <div id="root"></div>
+  <div class="wrap">
+    <div id="root">Cargando…</div>
+  </div>
 
-  <!-- IMPORTANTE: data-presets="env,react" para que compile JSX -->
+  <!-- IMPORTANTE: data-presets="env,react" -->
   <script type="text/babel" data-presets="env,react">
     const { useState, useEffect, useRef } = React;
 
-    const generateShortId = () => Math.random().toString(36).substr(2, 6).toUpperCase();
-
+    const genId = () => Math.random().toString(36).substr(2, 6).toUpperCase();
     const MSG = { QUESTION: 'QUESTION', ANSWER: 'ANSWER' };
 
     function App() {
-      const [role, setRole] = useState(null); // 'host' | 'student' | null
+      const [role, setRole] = useState(null);         // 'host' | 'student' | null
       const [peerId, setPeerId] = useState('');
-      const [status, setStatus] = useState('idle'); // 'connecting', 'connected', 'error', 'connected-to-host'
+      const [status, setStatus] = useState('idle');   // 'connecting' | 'connected' | 'connected-to-host' | 'error' | 'idle'
       const [errorMsg, setErrorMsg] = useState('');
       const [diag, setDiag] = useState('');
 
-      // PeerJS refs
       const peerRef = useRef(null);
       const connectionsRef = useRef({});
       const hostConnRef = useRef(null);
 
-      // Estado host
+      // Host state
       const [studentsCount, setStudentsCount] = useState(0);
       const [currentQuestion, setCurrentQuestion] = useState(null);
       const [liveAnswers, setLiveAnswers] = useState({});
 
-      // Estado alumno
+      // Student state
       const [activeQuestion, setActiveQuestion] = useState(null);
       const [myAnswer, setMyAnswer] = useState(null);
 
       useEffect(() => () => { if (peerRef.current) peerRef.current.destroy(); }, []);
 
-      // ===== CONFIG: servidor PeerJS público + STUN/TURN (OpenRelay/Metered) =====
+      // PeerJS + STUN/TURN para atravesar NAT
       const peerConfig = {
         host: '0.peerjs.com',
         port: 443,
@@ -65,437 +75,253 @@
         secure: true,
         debug: 2,
         config: {
-          // ICE: STUN + TURN para atravesar NAT y Wi-Fi estrictas
           iceServers: [
-            // STUN (Google)
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
-
-            // STUN (OpenRelay)
             { urls: 'stun:stun.relay.metered.ca:80' },
-
-            // TURN (OpenRelay / Metered) — credenciales públicas para pruebas
-            { urls: 'turn:global.relay.metered.ca:80',
-              username: 'openrelayproject', credential: 'openrelayproject' },
-            { urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-              username: 'openrelayproject', credential: 'openrelayproject' },
-            { urls: 'turn:global.relay.metered.ca:443',
-              username: 'openrelayproject', credential: 'openrelayproject' },
-            { urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-              username: 'openrelayproject', credential: 'openrelayproject' }
+            { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
           ],
-          iceTransportPolicy: 'all' // permitir relé si hace falta
+          iceTransportPolicy: 'all'
         }
       };
 
-      const setDiagLine = (line) => setDiag(prev => (prev ? prev + '\n' + line : line));
-
-      const humanizePeerError = (err) => {
-        if (!err) return 'Error desconocido de conexión.';
-        if (err.type === 'unavailable-id') return 'El ID ya está en uso. Vuelve a crear la sala.';
-        if (err.type === 'peer-unavailable') return 'No se encontró la sala del profesor. Verifica el ID.';
-        if (String(err).includes('Lost connection') || err.type === 'server-error')
-          return 'No se puede contactar con el servidor de conexión. Es posible bloqueo de red.';
-        return 'Error de conexión: ' + (err.type || err.message || String(err));
+      const log = (m) => setDiag(p => (p ? p + "\\n" + m : m));
+      const niceErr = (e) => {
+        if (!e) return 'Error desconocido de conexión.';
+        if (e.type === 'unavailable-id') return 'El ID ya está en uso. Vuelve a crear la sala.';
+        if (e.type === 'peer-unavailable') return 'No se encontró la sala del profesor. Verifica el ID.';
+        if (String(e).includes('Lost connection') || e.type === 'server-error') return 'No se puede contactar con el servidor de conexión (posible bloqueo de red).';
+        return 'Error de conexión: ' + (e.type || e.message || String(e));
       };
 
-      const initializePeer = (id = null) => {
-        setStatus('connecting');
-        setErrorMsg('');
-        setDiag('');
+      const initPeer = (id = null) => {
+        setStatus('connecting'); setErrorMsg(''); setDiag('');
         const peer = new Peer(id, peerConfig);
 
-        peer.on('open', (id) => {
-          setPeerId(id);
-          setStatus('connected');
-          setDiagLine('Peer abierto con ID: ' + id);
-        });
-
-        peer.on('disconnected', () => {
-          setDiagLine('Peer desconectado. Reintentando...');
-          try { peer.reconnect(); } catch {}
-        });
-
-        peer.on('close', () => setDiagLine('Peer cerrado.'));
-
-        peer.on('error', (err) => {
-          console.error('Peer error:', err);
-          setStatus('error');
-          setErrorMsg(humanizePeerError(err));
-          setDiagLine('ERROR: ' + (err?.type || '') + ' ' + (err?.message || err?.toString?.() || ''));
-        });
+        peer.on('open', (id) => { setPeerId(id); setStatus('connected'); log('Peer abierto con ID: ' + id); });
+        peer.on('disconnected', () => { log('Peer desconectado. Reintentando…'); try { peer.reconnect(); } catch {} });
+        peer.on('close', () => log('Peer cerrado.'));
+        peer.on('error', (e) => { console.error(e); setStatus('error'); setErrorMsg(niceErr(e)); log('ERROR: ' + (e?.type || '') + ' ' + (e?.message || e)); });
 
         peerRef.current = peer;
         return peer;
       };
 
-      // --- Host ---
-      const currentQuestionRef = useRef(null);
-      useEffect(() => { currentQuestionRef.current = currentQuestion; }, [currentQuestion]);
+      // ---- HOST ----
+      const curQRef = useRef(null);
+      useEffect(() => { curQRef.current = currentQuestion; }, [currentQuestion]);
 
       const startHosting = () => {
-        const id = generateShortId();
-        const peer = initializePeer(id);
+        const id = genId();
+        const peer = initPeer(id);
         setRole('host');
 
         peer.on('connection', (conn) => {
-          setDiagLine('Alumno intentó conectar: ' + conn.peer);
-
-          // IMPORTANTE: aceptar y preparar el canal
+          log('Alumno intentó conectar: ' + conn.peer);
           conn.on('open', () => {
             connectionsRef.current[conn.peer] = conn;
             setStudentsCount(Object.keys(connectionsRef.current).length);
-            setDiagLine('Conexión abierta con ' + conn.peer);
-
-            if (currentQuestionRef.current) {
-              conn.send({ type: MSG.QUESTION, payload: currentQuestionRef.current });
-            }
+            log('Conexión abierta con ' + conn.peer);
+            if (curQRef.current) conn.send({ type: MSG.QUESTION, payload: curQRef.current });
           });
-
-          conn.on('data', (data) => {
-            if (data.type === MSG.ANSWER) handleStudentAnswer(conn.peer, data.payload);
-          });
-
-          conn.on('close', () => {
-            delete connectionsRef.current[conn.peer];
-            setStudentsCount(Object.keys(connectionsRef.current).length);
-            setDiagLine('Conexión cerrada: ' + conn.peer);
-          });
-
-          conn.on('error', (e) => setDiagLine('Error en conexión alumno: ' + (e?.message || e)));
+          conn.on('data', (d) => { if (d.type === MSG.ANSWER) setLiveAnswers(p => ({ ...p, [conn.peer]: d.payload })); });
+          conn.on('close', () => { delete connectionsRef.current[conn.peer]; setStudentsCount(Object.keys(connectionsRef.current).length); log('Conexión cerrada: ' + conn.peer); });
+          conn.on('error', (e) => log('Error en conexión alumno: ' + (e?.message || e)));
         });
       };
 
-      const broadcastQuestion = (questionData) => {
-        setCurrentQuestion(questionData);
+      const broadcastQuestion = (text, options) => {
+        const q = { id: Date.now(), text, options };
+        setCurrentQuestion(q);
         setLiveAnswers({});
-        const msg = { type: MSG.QUESTION, payload: questionData };
-        Object.values(connectionsRef.current).forEach(conn => { if (conn.open) conn.send(msg); });
-      };
-
-      const handleStudentAnswer = (studentId, answerIndex) => {
-        setLiveAnswers(prev => ({ ...prev, [studentId]: answerIndex }));
+        const msg = { type: MSG.QUESTION, payload: q };
+        Object.values(connectionsRef.current).forEach(c => { if (c.open) c.send(msg); });
       };
 
       const stopHosting = () => {
         if (peerRef.current) peerRef.current.destroy();
-        setRole(null);
-        setLiveAnswers({});
-        setCurrentQuestion(null);
-        setStudentsCount(0);
-        setPeerId('');
-        setStatus('idle');
+        setRole(null); setPeerId(''); setStatus('idle');
+        setStudentsCount(0); setCurrentQuestion(null); setLiveAnswers({});
       };
 
-      // --- Alumno ---
+      // ---- STUDENT ----
       const joinSession = (hostId) => {
         if (!hostId) return;
         setRole('student');
-        const peer = initializePeer(); // id automático
+        const peer = initPeer();
 
         peer.on('open', () => {
-          const conn = peer.connect(hostId.toUpperCase(), {
-            reliable: true
-          });
-
-          conn.on('open', () => {
-            setStatus('connected-to-host');
-            hostConnRef.current = conn;
-            setDiagLine('Alumno conectado al host.');
-          });
-
-          conn.on('data', (data) => {
-            if (data.type === MSG.QUESTION) {
-              setActiveQuestion(data.payload);
-              setMyAnswer(null);
-            }
-          });
-
-          conn.on('close', () => {
-            alert('El profesor ha cerrado la sesión.');
-            setStatus('idle');
-            setRole(null);
-            setActiveQuestion(null);
-          });
-
-          conn.on('error', (e) => {
-            setErrorMsg('Error conectando con la sala.');
-            setDiagLine('Error data-conn alumno: ' + (e?.message || e));
-          });
+          const conn = peer.connect(hostId.toUpperCase(), { reliable: true });
+          conn.on('open', () => { setStatus('connected-to-host'); hostConnRef.current = conn; log('Alumno conectado al host.'); });
+          conn.on('data', (d) => { if (d.type === MSG.QUESTION) { setActiveQuestion(d.payload); setMyAnswer(null); } });
+          conn.on('close', () => { alert('El profesor ha cerrado la sesión.'); setStatus('idle'); setRole(null); setActiveQuestion(null); });
+          conn.on('error', (e) => { setErrorMsg('Error conectando con la sala.'); log('Error data-conn alumno: ' + (e?.message || e)); });
         });
       };
 
-      const sendAnswer = (index) => {
-        if (hostConnRef.current && hostConnRef.current.open) {
-          hostConnRef.current.send({ type: MSG.ANSWER, payload: index });
-          setMyAnswer(index);
-        }
-      };
+      const sendAnswer = (i) => { if (hostConnRef.current?.open) { hostConnRef.current.send({ type: MSG.ANSWER, payload: i }); setMyAnswer(i); } };
+      const leaveStudent = () => { if (peerRef.current) peerRef.current.destroy(); setRole(null); setActiveQuestion(null); setStatus('idle'); setPeerId(''); };
 
-      const leaveSession = () => {
-        if (peerRef.current) peerRef.current.destroy();
-        setRole(null);
-        setActiveQuestion(null);
-        setStatus('idle');
-        setPeerId('');
-      };
+      // ---- UI mínima ----
+      if (role === 'host') return <HostView
+        status={status} peerId={peerId} students={studentsCount}
+        currentQuestion={currentQuestion} liveAnswers={liveAnswers}
+        onSend={(t,o)=>broadcastQuestion(t,o)} onExit={stopHosting}
+        errorMsg={errorMsg} diag={diag}
+      />;
 
-      // --- UI auxiliares ---
-      function Card({children}) { return <div className="bg-white p-8 rounded-2xl shadow-xl max-w-3xl w-full">{children}</div>; }
-      function ErrorPanel({errorMsg, diag}) {
-        if (!errorMsg && !diag) return null;
-        return (
-          <div className="mt-4 space-y-2">
-            {errorMsg && <div className="bg-red-50 text-red-700 p-3 rounded-lg text-sm">{errorMsg}</div>}
+      if (role === 'student') return <StudentView
+        status={status} errorMsg={errorMsg} diag={diag}
+        question={activeQuestion} myAnswer={myAnswer}
+        onAnswer={sendAnswer} onExit={leaveStudent}
+      />;
+
+      return <Landing onHost={startHosting} onJoin={joinSession} status={status} errorMsg={errorMsg} diag={diag} />;
+    }
+
+    function Landing({ onHost, onJoin, status, errorMsg, diag }) {
+      const [code, setCode] = React.useState('');
+      return (
+        <div>
+          <h1>🎓 Aula Quiz P2P</h1>
+          <div className="muted">Herramienta de preguntas en vivo sin servidor.</div>
+
+          {status === 'connecting' && <div className="ok">Conectando…</div>}
+
+          <div className="card">
+            <div className="row">
+              <button onClick={onHost} disabled={status==='connecting'}>Soy Profesor (Crear sala)</button>
+            </div>
+            <div className="row">
+              <input type="text" value={code} onChange={e=>setCode(e.target.value.toUpperCase())} placeholder="ID de sala (p. ej. ABC123)" />
+              <button className="secondary" onClick={()=>onJoin(code)} disabled={!code || code.length<4 || status==='connecting'}>Entrar como Alumno</button>
+            </div>
+            {errorMsg && <div className="error">{errorMsg}</div>}
             {diag && (
-              <details className="bg-gray-50 text-gray-700 p-3 rounded-lg text-xs">
-                <summary className="cursor-pointer font-medium">Detalles técnicos</summary>
-                <pre className="whitespace-pre-wrap mt-2">{diag}</pre>
-              </details>
+              <details style={{marginTop:'8px'}}><summary>Detalles técnicos</summary><pre className="small">{diag}</pre></details>
             )}
           </div>
-        );
-      }
-
-      // --- Vistas ---
-      if (role === 'host') {
-        return (
-          <HostView
-            peerId={peerId}
-            status={status}
-            studentsCount={studentsCount}
-            onBroadcast={broadcastQuestion}
-            currentQuestion={currentQuestion}
-            liveAnswers={liveAnswers}
-            onExit={stopHosting}
-            errorMsg={errorMsg}
-            diag={diag}
-          />
-        );
-      }
-      if (role === 'student') {
-        return (
-          <StudentView
-            status={status}
-            errorMsg={errorMsg}
-            activeQuestion={activeQuestion}
-            myAnswer={myAnswer}
-            onSendAnswer={sendAnswer}
-            onExit={leaveSession}
-            diag={diag}
-          />
-        );
-      }
-      return <LandingView onHost={startHosting} onJoin={joinSession} status={status} errorMsg={errorMsg} diag={diag} />;
-    }
-
-    function LandingView({ onHost, onJoin, status, errorMsg, diag }) {
-      const [joinId, setJoinId] = useState('');
-      return (
-        <div className="min-h-screen flex items-center justify-center p-4 fade-in">
-          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-3xl w-full">
-            <h1 className="text-3xl font-bold text-blue-600 text-center mb-6">🎓 Aula Quiz P2P</h1>
-            <p className="text-gray-500 text-center mb-6">Herramienta de preguntas en vivo sin servidor.</p>
-
-            {status === 'connecting' && <div className="text-center text-blue-500 mb-4 animate-pulse">Conectando a la red…</div>}
-
-            <div className="space-y-4">
-              <button
-                onClick={onHost}
-                disabled={status === 'connecting'}
-                className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-lg transition-all disabled:opacity-50"
-              >Soy Profesor (Crear Sala)</button>
-
-              <div className="relative flex py-3 items-center">
-                <div className="flex-grow border-t border-gray-200"></div>
-                <span className="mx-4 text-gray-400">o</span>
-                <div className="flex-grow border-t border-gray-200"></div>
-              </div>
-
-              <div className="bg-gray-50 p-4 rounded-xl">
-                <label className="block text-sm font-medium text-gray-700 mb-2">ID de Sala del Profesor</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={joinId}
-                    onChange={(e) => setJoinId(e.target.value.toUpperCase())}
-                    placeholder="EJ: XY7Z99"
-                    className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono uppercase"
-                    maxLength={6}
-                  />
-                  <button
-                    onClick={() => onJoin(joinId)}
-                    disabled={status === 'connecting' || joinId.length < 4}
-                    className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50"
-                  >Entrar</button>
-                </div>
-              </div>
-            </div>
-
-            <ErrorPanel errorMsg={errorMsg} diag={diag} />
-          </div>
         </div>
       );
     }
 
-    function HostView({ peerId, status, studentsCount, onBroadcast, currentQuestion, liveAnswers, onExit, errorMsg, diag }) {
-      const { useState } = React;
-      const [qText, setQText] = useState('');
-      const [options, setOptions] = useState(['', '']);
-      const addOption = () => setOptions([...options, '']);
-      const updateOption = (i, v) => { const n=[...options]; n[i]=v; setOptions(n); };
-      const removeOption = (i) => setOptions(options.filter((_, idx) => idx !== i));
-      const handleSend = () => {
-        if (!qText.trim() || options.some(o => !o.trim())) { alert('Completa la pregunta y todas las opciones.'); return; }
-        onBroadcast({ id: Date.now(), text: qText, options: options.filter(o => o.trim() !== '') });
+    function HostView({ status, peerId, students, currentQuestion, liveAnswers, onSend, onExit, errorMsg, diag }) {
+      const [text, setText] = useState('');
+      const [opts, setOpts] = useState(['','']);
+      const updateOpt = (i,v)=>{ const n=[...opts]; n[i]=v; setOpts(n); };
+      const addOpt = ()=> setOpts(p=>[...p,'']);
+      const rmOpt = (i)=> setOpts(p=>p.filter((_,ix)=>ix!==i));
+      const launch = ()=>{
+        const clean = opts.map(s=>s.trim()).filter(Boolean);
+        if (!text.trim() || clean.length<2) { alert('Escribe la pregunta y al menos 2 opciones.'); return; }
+        onSend(text.trim(), clean);
       };
-      const totalAnswers = Object.keys(liveAnswers).length;
+
+      const total = Object.keys(liveAnswers).length;
 
       return (
-        <div className="min-h-screen p-4 md:p-8 fade-in">
-          <div className="max-w-5xl mx-auto space-y-6">
-            <div className="bg-white p-8 rounded-2xl shadow-xl">
-              <div className="flex flex-col md:flex-row justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-bold text-blue-900">Panel de Profesor</h2>
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className="text-gray-500">ID de Sala:</span>
-                    {status === 'connected'
-                      ? <span className="bg-blue-100 text-blue-800 text-2xl font-mono font-bold px-3 py-1 rounded-lg tracking-widest select-all">{peerId}</span>
-                      : <span className="animate-pulse text-gray-400">Generando…</span>}
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">Comparte este ID con tus alumnos.</p>
+        <div>
+          <h1>Panel de Profesor</h1>
+          <div className="row small">
+            <div>ID de Sala:&nbsp;{status==='connected' ? <span className="chip">{peerId}</span> : 'Generando…'}</div>
+            <div style={{marginLeft:'auto'}}>Alumnos conectados: <b>{students}</b></div>
+          </div>
+
+          <div className="card">
+            <div style={{marginBottom:8}}><b>Nueva pregunta</b></div>
+            <textarea rows="3" placeholder="Escribe tu pregunta…" value={text} onChange={e=>setText(e.target.value)}></textarea>
+            <div className="list">
+              {opts.map((o, i)=>(
+                <div key={i} className="row">
+                  <span className="small" style={{width:24}}>{String.fromCharCode(65+i)}.</span>
+                  <input type="text" placeholder={`Opción ${i+1}`} value={o} onChange={e=>updateOpt(i,e.target.value)}/>
+                  {opts.length>2 && <button className="danger" onClick={()=>rmOpt(i)}>Eliminar</button>}
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="bg-green-50 text-green-700 px-4 py-2 rounded-full font-medium">{studentsCount} alumnos</div>
-                  <button onClick={onExit} className="text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg">Salir</button>
-                </div>
-              </div>
-              <ErrorPanel errorMsg={errorMsg} diag={diag} />
+              ))}
             </div>
-
-            <div className="grid md:grid-cols-2 gap-6">
-              <div className="bg-white p-8 rounded-2xl shadow-xl">
-                <h3 className="text-lg font-semibold mb-4">Nueva Pregunta</h3>
-                <div className="space-y-3">
-                  <textarea value={qText} onChange={e=>setQText(e.target.value)} placeholder="Escribe tu pregunta..." className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 h-24"></textarea>
-                  <div className="space-y-2">
-                    {options.map((opt, idx)=>(
-                      <div key={idx} className="flex gap-2 items-center">
-                        <span className="text-gray-400 font-mono">{String.fromCharCode(65+idx)}.</span>
-                        <input value={opt} onChange={e=>updateOption(idx,e.target.value)} className="flex-1 p-2 border rounded-md focus:ring-1 focus:ring-blue-500" placeholder={`Opción ${idx+1}`} />
-                        {options.length>2 && <button onClick={()=>removeOption(idx)} className="text-gray-400 hover:text-red-500">✕</button>}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="flex gap-2 pt-2">
-                    <button onClick={addOption} className="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">Añadir Opción</button>
-                  </div>
-                  <button onClick={handleSend} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold mt-2">Lanzar a la Clase</button>
-                </div>
-              </div>
-
-              <div className="bg-white p-8 rounded-2xl shadow-xl">
-                <h3 className="text-lg font-semibold mb-4">Resultados en Vivo</h3>
-                {!currentQuestion ? (
-                  <div className="text-gray-400 py-12 text-center">Esperando primera pregunta…</div>
-                ) : (
-                  <div className="space-y-6">
-                    <p className="font-medium text-gray-800">{currentQuestion.text}</p>
-                    <div className="space-y-3">
-                      {currentQuestion.options.map((opt, idx)=>{
-                        const count = Object.values(liveAnswers).filter(a => a === idx).length;
-                        const total = Object.keys(liveAnswers).length;
-                        const pct = total>0 ? Math.round((count/total)*100) : 0;
-                        return (
-                          <div key={idx}>
-                            <div className="flex justify-between text-sm mb-1">
-                              <span>{String.fromCharCode(65+idx)}. {opt}</span>
-                              <span className="font-semibold">{count}</span>
-                            </div>
-                            <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                              <div className="h-full bg-blue-500 transition-all" style={{width: `${pct}%`}}></div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
+            <div className="row">
+              <button onClick={addOpt}>Añadir opción</button>
+              <div style={{flex:1}}></div>
+              <button className="secondary" onClick={launch}>Lanzar a la clase</button>
+              <button className="danger" onClick={onExit}>Salir</button>
             </div>
           </div>
+
+          <div className="card">
+            <div style={{marginBottom:8}}><b>Resultados en vivo</b></div>
+            {!currentQuestion ? (
+              <div className="muted">Aún no hay pregunta.</div>
+            ) : (
+              <div>
+                <div style={{margin:'6px 0'}}><b>{currentQuestion.text}</b></div>
+                <div className="list">
+                  {currentQuestion.options.map((opt, idx)=>{
+                    const count = Object.values(liveAnswers).filter(a => a === idx).length;
+                    const pct = total>0 ? Math.round((count/total)*100) : 0;
+                    return (
+                      <div key={idx}>
+                        <div className="row" style={{justifyContent:'space-between'}}>
+                          <div>{String.fromCharCode(65+idx)}. {opt}</div>
+                          <div><b>{count}</b> ({pct}%)</div>
+                        </div>
+                        <div style="height:8px;background:#eee;border-radius:6px;overflow:hidden;">
+                          <div style={{height:'8px',width:pct+'%',background:'#2563eb'}}></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="small" style={{marginTop:6}}>Total respuestas: <b>{total}</b></div>
+              </div>
+            )}
+          </div>
+
+          {errorMsg && <div className="error">{errorMsg}</div>}
+          {diag && <details style={{marginTop:'8px'}}><summary>Detalles técnicos</summary><pre className="small">{diag}</pre></details>}
         </div>
       );
     }
 
-    function StudentView({ status, errorMsg, activeQuestion, myAnswer, onSendAnswer, onExit, diag }) {
-      const waiting = (status === 'connecting' || (status === 'connected-to-host' && !activeQuestion));
-      if (waiting) {
+    function StudentView({ status, errorMsg, diag, question, myAnswer, onAnswer, onExit }) {
+      if (status === 'connecting' || (status === 'connected-to-host' && !question)) {
         return (
-          <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center fade-in">
-            <div className="w-20 h-20 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mx-auto animate-bounce">⏳</div>
-            <h2 className="text-2xl font-bold text-gray-700 mt-4">¡Estás dentro!</h2>
-            <p className="text-gray-500">Espera a que el profesor lance la primera pregunta.</p>
-            {(errorMsg || diag) && (
-              <div className="mt-4 w-full max-w-lg text-left">
-                <div className="bg-gray-50 text-gray-700 p-3 rounded-lg text-xs">
-                  <details>
-                    <summary className="cursor-pointer font-medium">Detalles técnicos</summary>
-                    <pre className="whitespace-pre-wrap mt-2">{(errorMsg?('ERROR: '+errorMsg+'\n\n'):'') + (diag||'')}</pre>
-                  </details>
-                </div>
-            </div>)}
-            <button onClick={onExit} className="mt-6 text-gray-400 underline text-sm">Salir</button>
+          <div>
+            <h1>Alumno</h1>
+            <div className="muted">Conectando / esperando primera pregunta…</div>
+            {errorMsg && <div className="error">{errorMsg}</div>}
+            {diag && <details style={{marginTop:'8px'}}><summary>Detalles técnicos</summary><pre className="small">{diag}</pre></details>}
+            <div className="row"><button className="danger" onClick={onExit}>Salir</button></div>
           </div>
         );
       }
-
-      if (!activeQuestion) {
-        return (
-          <div className="min-h-screen flex items-center justify-center p-6">
-            <div className="text-gray-500">Conectado. Esperando pregunta…</div>
-          </div>
-        );
+      if (!question) {
+        return <div><h1>Alumno</h1><div className="muted">Esperando pregunta…</div><div className="row"><button className="danger" onClick={onExit}>Salir</button></div></div>;
       }
-
       return (
-        <div className="min-h-screen bg-gray-100 p-4 flex items-center justify-center fade-in">
-          <div className="w-full max-w-lg bg-white p-6 md:p-8 rounded-2xl shadow-xl">
-            <div className="mb-8">
-              <span className="text-xs font-bold text-blue-600 tracking-widest uppercase">Pregunta Actual</span>
-              <h2 className="text-xl md:text-2xl font-bold text-gray-900 mt-2 leading-tight">{activeQuestion.text}</h2>
-            </div>
-
-            <div className="space-y-3">
-              {activeQuestion.options.map((opt, idx) => {
-                const isSelected = myAnswer === idx;
+        <div>
+          <h1>Alumno</h1>
+          <div className="card">
+            <div className="small">Pregunta actual</div>
+            <div style={{fontWeight:700, margin:'6px 0'}}>{question.text}</div>
+            <div className="list">
+              {question.options.map((opt, idx) => {
+                const selected = myAnswer === idx;
                 return (
-                  <button
-                    key={idx}
-                    onClick={() => onSendAnswer(idx)}
-                    disabled={myAnswer !== null}
-                    className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-center gap-4
-                      ${isSelected ? 'border-blue-500 bg-blue-50 text-blue-800 font-semibold'
-                                   : myAnswer !== null ? 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed'
-                                                       : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50/50'}
-                    `}
-                  >
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold
-                      ${isSelected ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
-                      {String.fromCharCode(65 + idx)}
-                    </div>
-                    <span className="text-lg">{opt}</span>
-                    {isSelected && <span className="ml-auto">✔</span>}
-                  </button>
+                  <div key={idx} className="row">
+                    <button onClick={()=>onAnswer(idx)} disabled={myAnswer!==null} style={{background:selected?'#1d4ed8':'#2563eb'}}>
+                      {String.fromCharCode(65+idx)}
+                    </button>
+                    <div className="small" style={{fontSize:'16px'}}>{opt}</div>
+                  </div>
                 );
               })}
             </div>
-
-            {myAnswer !== null && (
-              <div className="mt-6 text-center text-green-600 font-medium animate-pulse">Respuesta enviada. ¡Espera la siguiente!</div>
-            )}
+            {myAnswer!==null && <div className="ok">Respuesta enviada ✅</div>}
           </div>
+          <div className="row"><button className="danger" onClick={onExit}>Salir</button></div>
         </div>
       );
     }
