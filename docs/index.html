@@ -1,18 +1,25 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <title>Quiz P2P de Clase</title>
+
+    <!-- React + Babel + Tailwind -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+
     <!-- PeerJS para WebRTC simplificado -->
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
-    <!-- Lucide Icons -->
+
+    <!-- Lucide Icons (opcional, usamos SVG inline) -->
     <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Fuente -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
         .fade-in { animation: fadeIn 0.3s ease-in; }
@@ -22,7 +29,8 @@
 <body>
     <div id="root"></div>
 
-    <script type="text/babel">
+    <!-- IMPORTANTE: añadir data-presets="env,react" -->
+    <script type="text/babel" data-presets="env,react">
         const { useState, useEffect, useRef } = React;
 
         // Generador de IDs aleatorios cortos para facilitar la entrada manual
@@ -55,19 +63,24 @@
             const [activeQuestion, setActiveQuestion] = useState(null);
             const [myAnswer, setMyAnswer] = useState(null);
 
-            // --- Lógica Común e Inicialización ---
             useEffect(() => {
                 return () => {
-                    // Limpieza al desmontar
                     if (peerRef.current) peerRef.current.destroy();
                 };
             }, []);
 
+            // === CONFIG COMÚN DE PEERJS (usa servidor público) ===
+            const peerConfig = {
+                host: '0.peerjs.com',
+                port: 443,
+                path: '/',
+                secure: true,
+                debug: 1,
+            };
+
             const initializePeer = (id = null) => {
                 setStatus('connecting');
-                const peer = new Peer(id, {
-                    debug: 1,
-                });
+                const peer = new Peer(id, peerConfig);
 
                 peer.on('open', (id) => {
                     setPeerId(id);
@@ -78,11 +91,10 @@
                 peer.on('error', (err) => {
                     console.error('Peer error:', err);
                     setStatus('error');
-                    // Errores comunes amigables
                     if (err.type === 'peer-unavailable') {
                         setErrorMsg('No se encontró la sala del profesor. Verifica el ID.');
                     } else if (err.type === 'unavailable-id') {
-                        setErrorMsg('El ID ya está en uso. Intenta de nuevo.');
+                        setErrorMsg('El ID ya está en uso. Recarga para obtener otro.');
                     } else {
                         setErrorMsg('Error de conexión: ' + err.type);
                     }
@@ -102,13 +114,12 @@
                     console.log('Estudiante conectado:', conn.peer);
 
                     conn.on('open', () => {
-                        // Guardar conexión
                         connectionsRef.current[conn.peer] = conn;
                         setStudentsCount(Object.keys(connectionsRef.current).length);
 
                         // Si hay una pregunta activa, enviársela al que acaba de llegar
                         if (currentQuestionRef.current) {
-                             conn.send({
+                            conn.send({
                                 type: MSG.QUESTION,
                                 payload: currentQuestionRef.current
                             });
@@ -137,7 +148,7 @@
 
             const broadcastQuestion = (questionData) => {
                 setCurrentQuestion(questionData);
-                setLiveAnswers({}); // Reiniciar respuestas para la nueva pregunta
+                setLiveAnswers({});
                 const msg = { type: MSG.QUESTION, payload: questionData };
 
                 Object.values(connectionsRef.current).forEach(conn => {
@@ -153,19 +164,19 @@
             };
 
             const stopHosting = () => {
-                 if (peerRef.current) peerRef.current.destroy();
-                 setRole(null);
-                 setLiveAnswers({});
-                 setCurrentQuestion(null);
-                 setStudentsCount(0);
+                if (peerRef.current) peerRef.current.destroy();
+                setRole(null);
+                setLiveAnswers({});
+                setCurrentQuestion(null);
+                setStudentsCount(0);
             };
-
 
             // --- Lógica del Estudiante ---
             const joinSession = (hostId) => {
                 if (!hostId) return;
                 setRole('student');
-                // Estudiante usa ID automático
+
+                // Estudiante usa ID automático con la misma config
                 const peer = initializePeer();
 
                 peer.on('open', () => {
@@ -181,7 +192,7 @@
                         console.log("Datos recibidos del profesor:", data);
                         if (data.type === MSG.QUESTION) {
                             setActiveQuestion(data.payload);
-                            setMyAnswer(null); // Resetear respuesta anterior
+                            setMyAnswer(null);
                         }
                     });
 
@@ -192,52 +203,48 @@
                     });
 
                     conn.on('error', (err) => {
-                         console.error("Error en conexión con host:", err);
-                         setErrorMsg("Error conectando con la sala.");
+                        console.error("Error en conexión con host:", err);
+                        setErrorMsg("Error conectando con la sala.");
                     });
                 });
             };
 
             const sendAnswer = (index) => {
                 if (hostConnRef.current && hostConnRef.current.open) {
-                    hostConnRef.current.send({
-                        type: MSG.ANSWER,
-                        payload: index
-                    });
+                    hostConnRef.current.send({ type: MSG.ANSWER, payload: index });
                     setMyAnswer(index);
                 }
             };
 
             const leaveSession = () => {
-                 if (peerRef.current) peerRef.current.destroy();
-                 setRole(null);
-                 setActiveQuestion(null);
+                if (peerRef.current) peerRef.current.destroy();
+                setRole(null);
+                setActiveQuestion(null);
             };
-
 
             // --- RENDERIZADO ---
 
             if (role === 'host') {
                 return <HostView
-                            peerId={peerId}
-                            status={status}
-                            studentsCount={studentsCount}
-                            onBroadcast={broadcastQuestion}
-                            currentQuestion={currentQuestion}
-                            liveAnswers={liveAnswers}
-                            onExit={stopHosting}
-                        />;
+                    peerId={peerId}
+                    status={status}
+                    studentsCount={studentsCount}
+                    onBroadcast={broadcastQuestion}
+                    currentQuestion={currentQuestion}
+                    liveAnswers={liveAnswers}
+                    onExit={stopHosting}
+                />;
             }
 
             if (role === 'student') {
                 return <StudentView
-                            status={status}
-                            errorMsg={errorMsg}
-                            activeQuestion={activeQuestion}
-                            myAnswer={myAnswer}
-                            onSendAnswer={sendAnswer}
-                            onExit={leaveSession}
-                        />;
+                    status={status}
+                    errorMsg={errorMsg}
+                    activeQuestion={activeQuestion}
+                    myAnswer={myAnswer}
+                    onSendAnswer={sendAnswer}
+                    onExit={leaveSession}
+                />;
             }
 
             return <LandingView onHost={startHosting} onJoin={joinSession} status={status} errorMsg={errorMsg} />;
@@ -251,7 +258,7 @@
                 <div className="min-h-screen flex items-center justify-center p-4 fade-in">
                     <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
                         <h1 className="text-3xl font-bold text-gray-800 mb-6 text-center text-blue-600">
-                             🎓 Aula Quiz P2P
+                            🎓 Aula Quiz P2P
                         </h1>
                         <p className="text-gray-500 text-center mb-8">
                             Herramienta de preguntas en vivo sin servidor.
@@ -260,7 +267,7 @@
                         {status === 'connecting' && (
                             <div className="text-center text-blue-500 mb-4 animate-pulse">Conectando a la red...</div>
                         )}
-                         {errorMsg && (
+                        {errorMsg && (
                             <div className="bg-red-50 text-red-600 p-3 rounded-lg mb-4 text-sm text-center">
                                 {errorMsg}
                             </div>
@@ -319,7 +326,7 @@
                 newOpts[idx] = val;
                 setOptions(newOpts);
             };
-             const removeOption = (idx) => {
+            const removeOption = (idx) => {
                 setOptions(options.filter((_, i) => i !== idx));
             };
 
@@ -335,7 +342,6 @@
                 });
             };
 
-            // Calcular resultados
             const totalAnswers = Object.keys(liveAnswers).length;
             const results = currentQuestion?.options.map((_, idx) => {
                 const count = Object.values(liveAnswers).filter(a => a === idx).length;
@@ -345,11 +351,10 @@
             return (
                 <div className="min-h-screen bg-gray-100 p-4 md:p-8 fade-in">
                     <div className="max-w-4xl mx-auto">
-                        {/* Header Host */}
                         <div className="bg-white rounded-2xl shadow-sm p-4 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
                             <div>
                                 <h2 className="text-xl font-bold text-blue-900 flex items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-monitor-smartphone"><path d="M18 8v6a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M8 18v-1a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v1"/><path d="M22 19v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M14 22h8"/></svg>
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-monitor-smartphone"><path d="M18 8v6a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M8 18v-1a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v-1"/><path d="M22 19v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M14 22h8"/></svg>
                                     Panel de Profesor
                                 </h2>
                                 <div className="mt-1 flex items-center gap-2">
@@ -375,7 +380,6 @@
                         </div>
 
                         <div className="grid md:grid-cols-2 gap-6">
-                            {/* Creador de Preguntas */}
                             <div className="bg-white rounded-2xl shadow p-6">
                                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-pencil-line"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/><path d="m15 5 3 3"/></svg>
@@ -423,16 +427,15 @@
                                 </div>
                             </div>
 
-                            {/* Resultados en vivo */}
                             <div className="bg-white rounded-2xl shadow p-6">
                                 <h3 className="text-lg font-semibold mb-4 flex items-center justify-between">
                                     <div className="flex items-center gap-2">
-                                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bar-chart-3"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
-                                         Resultados en Vivo
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bar-chart-3"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+                                        Resultados en Vivo
                                     </div>
                                     {currentQuestion && (
                                         <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded-md">
-                                            Respuestas: {totalAnswers}/{studentsCount}
+                                            Respuestas: {Object.keys(liveAnswers).length}/{studentsCount}
                                         </span>
                                     )}
                                 </h3>
@@ -446,20 +449,22 @@
                                     <div className="space-y-6">
                                         <p className="font-medium text-gray-800">{currentQuestion.text}</p>
                                         <div className="space-y-3">
-                                            {currentQuestion.options.map((opt, idx) => (
-                                                <div key={idx} className="relative">
-                                                    <div className="flex justify-between text-sm mb-1">
-                                                        <span>{String.fromCharCode(65 + idx)}. {opt}</span>
-                                                        <span className="font-semibold">{results[idx]?.count || 0}</span>
+                                            {currentQuestion.options.map((opt, idx) => {
+                                                const totalAnswers = Object.keys(liveAnswers).length;
+                                                const count = Object.values(liveAnswers).filter(a => a === idx).length;
+                                                const percentage = totalAnswers > 0 ? Math.round((count / totalAnswers) * 100) : 0;
+                                                return (
+                                                    <div key={idx} className="relative">
+                                                        <div className="flex justify-between text-sm mb-1">
+                                                            <span>{String.fromCharCode(65 + idx)}. {opt}</span>
+                                                            <span className="font-semibold">{count}</span>
+                                                        </div>
+                                                        <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-blue-500 transition-all duration-500 ease-out" style={{ width: `${percentage}%` }}></div>
+                                                        </div>
                                                     </div>
-                                                    <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                                                        <div
-                                                            className="h-full bg-blue-500 transition-all duration-500 ease-out"
-                                                            style={{ width: `${results[idx]?.percentage || 0}%` }}
-                                                        ></div>
-                                                    </div>
-                                                </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
                                     </div>
                                 )}
@@ -473,10 +478,10 @@
         // --- VISTA ESTUDIANTE ---
         function StudentView({ status, errorMsg, activeQuestion, myAnswer, onSendAnswer, onExit }) {
             if (status === 'connecting' || (status === 'connected-to-host' && !activeQuestion)) {
-                 return (
+                return (
                     <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center fade-in">
                         {status === 'connecting' ? (
-                             <div className="text-blue-500 animate-pulse text-xl">Conectando con el aula...</div>
+                            <div className="text-blue-500 animate-pulse text-xl">Conectando con el aula...</div>
                         ) : (
                             <div className="space-y-4">
                                 <div className="w-20 h-20 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mx-auto animate-bounce">
@@ -486,8 +491,8 @@
                                 <p className="text-gray-500">Mira la pantalla del profesor. La pregunta aparecerá aquí pronto.</p>
                             </div>
                         )}
-                         {errorMsg && <p className="text-red-500 mt-4 bg-red-50 p-2 rounded">{errorMsg}</p>}
-                         <button onClick={onExit} className="mt-8 text-gray-400 underline text-sm">Salir</button>
+                        {errorMsg && <p className="text-red-500 mt-4 bg-red-50 p-2 rounded">{errorMsg}</p>}
+                        <button onClick={onExit} className="mt-8 text-gray-400 underline text-sm">Salir</button>
                     </div>
                 );
             }
@@ -496,10 +501,10 @@
                 <div className="min-h-screen bg-gray-100 p-4 flex items-center justify-center fade-in">
                     <div className="w-full max-w-lg bg-white p-6 md:p-8 rounded-2xl shadow-xl">
                         <div className="mb-8">
-                             <span className="text-xs font-bold text-blue-600 tracking-widest uppercase">Pregunta Actual</span>
-                             <h2 className="text-xl md:text-2xl font-bold text-gray-900 mt-2 leading-tight">
+                            <span className="text-xs font-bold text-blue-600 tracking-widest uppercase">Pregunta Actual</span>
+                            <h2 className="text-xl md:text-2xl font-bold text-gray-900 mt-2 leading-tight">
                                 {activeQuestion.text}
-                             </h2>
+                            </h2>
                         </div>
 
                         <div className="space-y-3">
@@ -514,10 +519,9 @@
                                             ${isSelected
                                                 ? 'border-blue-500 bg-blue-50 text-blue-800 font-semibold shadow-md'
                                                 : myAnswer !== null
-                                                    ? 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed' // Deshabilitado si ya respondió otra
+                                                    ? 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed'
                                                     : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50/50 active:scale-[0.98]'
-                                            }
-                                        `}
+                                            }`}
                                     >
                                         <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 font-bold
                                             ${isSelected ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-500'}
