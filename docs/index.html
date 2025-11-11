@@ -14,9 +14,6 @@
   <!-- PeerJS -->
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
-  <!-- (Opcional) Iconos -->
-  <script src="https://unpkg.com/lucide@latest"></script>
-
   <!-- Fuente -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
@@ -35,17 +32,14 @@
 
     const generateShortId = () => Math.random().toString(36).substr(2, 6).toUpperCase();
 
-    const MSG = {
-      QUESTION: 'QUESTION',
-      ANSWER: 'ANSWER'
-    };
+    const MSG = { QUESTION: 'QUESTION', ANSWER: 'ANSWER' };
 
     function App() {
       const [role, setRole] = useState(null); // 'host' | 'student' | null
       const [peerId, setPeerId] = useState('');
       const [status, setStatus] = useState('idle'); // 'connecting', 'connected', 'error', 'connected-to-host'
       const [errorMsg, setErrorMsg] = useState('');
-      const [diag, setDiag] = useState(''); // texto de diagnóstico visible
+      const [diag, setDiag] = useState('');
 
       // PeerJS refs
       const peerRef = useRef(null);
@@ -63,7 +57,7 @@
 
       useEffect(() => () => { if (peerRef.current) peerRef.current.destroy(); }, []);
 
-      // Config explícita de PeerJS (servidor público) + STUN
+      // ===== CONFIG: servidor PeerJS público + STUN/TURN (OpenRelay/Metered) =====
       const peerConfig = {
         host: '0.peerjs.com',
         port: 443,
@@ -71,14 +65,39 @@
         secure: true,
         debug: 2,
         config: {
+          // ICE: STUN + TURN para atravesar NAT y Wi-Fi estrictas
           iceServers: [
+            // STUN (Google)
             { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
+            { urls: 'stun:stun1.l.google.com:19302' },
+
+            // STUN (OpenRelay)
+            { urls: 'stun:stun.relay.metered.ca:80' },
+
+            // TURN (OpenRelay / Metered) — credenciales públicas para pruebas
+            { urls: 'turn:global.relay.metered.ca:80',
+              username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+              username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turn:global.relay.metered.ca:443',
+              username: 'openrelayproject', credential: 'openrelayproject' },
+            { urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+              username: 'openrelayproject', credential: 'openrelayproject' }
+          ],
+          iceTransportPolicy: 'all' // permitir relé si hace falta
         }
       };
 
       const setDiagLine = (line) => setDiag(prev => (prev ? prev + '\n' + line : line));
+
+      const humanizePeerError = (err) => {
+        if (!err) return 'Error desconocido de conexión.';
+        if (err.type === 'unavailable-id') return 'El ID ya está en uso. Vuelve a crear la sala.';
+        if (err.type === 'peer-unavailable') return 'No se encontró la sala del profesor. Verifica el ID.';
+        if (String(err).includes('Lost connection') || err.type === 'server-error')
+          return 'No se puede contactar con el servidor de conexión. Es posible bloqueo de red.';
+        return 'Error de conexión: ' + (err.type || err.message || String(err));
+      };
 
       const initializePeer = (id = null) => {
         setStatus('connecting');
@@ -97,29 +116,17 @@
           try { peer.reconnect(); } catch {}
         });
 
-        peer.on('close', () => {
-          setDiagLine('Peer cerrado.');
-        });
+        peer.on('close', () => setDiagLine('Peer cerrado.'));
 
         peer.on('error', (err) => {
           console.error('Peer error:', err);
           setStatus('error');
-          const msg = humanizePeerError(err);
-          setErrorMsg(msg);
+          setErrorMsg(humanizePeerError(err));
           setDiagLine('ERROR: ' + (err?.type || '') + ' ' + (err?.message || err?.toString?.() || ''));
         });
 
         peerRef.current = peer;
         return peer;
-      };
-
-      const humanizePeerError = (err) => {
-        if (!err) return 'Error desconocido de conexión.';
-        if (err.type === 'unavailable-id') return 'El ID ya está en uso. Vuelve a crear la sala.';
-        if (err.type === 'peer-unavailable') return 'No se encontró la sala del profesor. Verifica el ID.';
-        if (String(err).includes('Lost connection to server') || err.type === 'server-error')
-          return 'No se puede contactar con el servidor de conexión. Es posible que la red del campus lo bloquee.';
-        return 'Error de conexión: ' + (err.type || err.message || String(err));
       };
 
       // --- Host ---
@@ -133,20 +140,28 @@
 
         peer.on('connection', (conn) => {
           setDiagLine('Alumno intentó conectar: ' + conn.peer);
+
+          // IMPORTANTE: aceptar y preparar el canal
           conn.on('open', () => {
             connectionsRef.current[conn.peer] = conn;
             setStudentsCount(Object.keys(connectionsRef.current).length);
+            setDiagLine('Conexión abierta con ' + conn.peer);
+
             if (currentQuestionRef.current) {
               conn.send({ type: MSG.QUESTION, payload: currentQuestionRef.current });
             }
           });
+
           conn.on('data', (data) => {
             if (data.type === MSG.ANSWER) handleStudentAnswer(conn.peer, data.payload);
           });
+
           conn.on('close', () => {
             delete connectionsRef.current[conn.peer];
             setStudentsCount(Object.keys(connectionsRef.current).length);
+            setDiagLine('Conexión cerrada: ' + conn.peer);
           });
+
           conn.on('error', (e) => setDiagLine('Error en conexión alumno: ' + (e?.message || e)));
         });
       };
@@ -177,25 +192,32 @@
         if (!hostId) return;
         setRole('student');
         const peer = initializePeer(); // id automático
+
         peer.on('open', () => {
-          const conn = peer.connect(hostId.toUpperCase(), { reliable: true });
+          const conn = peer.connect(hostId.toUpperCase(), {
+            reliable: true
+          });
+
           conn.on('open', () => {
             setStatus('connected-to-host');
             hostConnRef.current = conn;
             setDiagLine('Alumno conectado al host.');
           });
+
           conn.on('data', (data) => {
             if (data.type === MSG.QUESTION) {
               setActiveQuestion(data.payload);
               setMyAnswer(null);
             }
           });
+
           conn.on('close', () => {
             alert('El profesor ha cerrado la sesión.');
             setStatus('idle');
             setRole(null);
             setActiveQuestion(null);
           });
+
           conn.on('error', (e) => {
             setErrorMsg('Error conectando con la sala.');
             setDiagLine('Error data-conn alumno: ' + (e?.message || e));
@@ -218,7 +240,24 @@
         setPeerId('');
       };
 
-      // --- UI ---
+      // --- UI auxiliares ---
+      function Card({children}) { return <div className="bg-white p-8 rounded-2xl shadow-xl max-w-3xl w-full">{children}</div>; }
+      function ErrorPanel({errorMsg, diag}) {
+        if (!errorMsg && !diag) return null;
+        return (
+          <div className="mt-4 space-y-2">
+            {errorMsg && <div className="bg-red-50 text-red-700 p-3 rounded-lg text-sm">{errorMsg}</div>}
+            {diag && (
+              <details className="bg-gray-50 text-gray-700 p-3 rounded-lg text-xs">
+                <summary className="cursor-pointer font-medium">Detalles técnicos</summary>
+                <pre className="whitespace-pre-wrap mt-2">{diag}</pre>
+              </details>
+            )}
+          </div>
+        );
+      }
+
+      // --- Vistas ---
       if (role === 'host') {
         return (
           <HostView
@@ -250,31 +289,11 @@
       return <LandingView onHost={startHosting} onJoin={joinSession} status={status} errorMsg={errorMsg} diag={diag} />;
     }
 
-    function Card({children}) {
-      return <div className="bg-white p-8 rounded-2xl shadow-xl max-w-3xl w-full">{children}</div>;
-    }
-
-    function ErrorPanel({errorMsg, diag}) {
-      if (!errorMsg && !diag) return null;
-      return (
-        <div className="mt-4 space-y-2">
-          {errorMsg && <div className="bg-red-50 text-red-700 p-3 rounded-lg text-sm">{errorMsg}</div>}
-          {diag && (
-            <details className="bg-gray-50 text-gray-700 p-3 rounded-lg text-xs">
-              <summary className="cursor-pointer font-medium">Detalles técnicos</summary>
-              <pre className="whitespace-pre-wrap mt-2">{diag}</pre>
-            </details>
-          )}
-        </div>
-      );
-    }
-
-    // --- Landing ---
     function LandingView({ onHost, onJoin, status, errorMsg, diag }) {
       const [joinId, setJoinId] = useState('');
       return (
         <div className="min-h-screen flex items-center justify-center p-4 fade-in">
-          <Card>
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-3xl w-full">
             <h1 className="text-3xl font-bold text-blue-600 text-center mb-6">🎓 Aula Quiz P2P</h1>
             <p className="text-gray-500 text-center mb-6">Herramienta de preguntas en vivo sin servidor.</p>
 
@@ -285,9 +304,7 @@
                 onClick={onHost}
                 disabled={status === 'connecting'}
                 className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-lg transition-all disabled:opacity-50"
-              >
-                Soy Profesor (Crear Sala)
-              </button>
+              >Soy Profesor (Crear Sala)</button>
 
               <div className="relative flex py-3 items-center">
                 <div className="flex-grow border-t border-gray-200"></div>
@@ -310,21 +327,19 @@
                     onClick={() => onJoin(joinId)}
                     disabled={status === 'connecting' || joinId.length < 4}
                     className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50"
-                  >
-                    Entrar
-                  </button>
+                  >Entrar</button>
                 </div>
               </div>
             </div>
 
             <ErrorPanel errorMsg={errorMsg} diag={diag} />
-          </Card>
+          </div>
         </div>
       );
     }
 
-    // --- Host ---
     function HostView({ peerId, status, studentsCount, onBroadcast, currentQuestion, liveAnswers, onExit, errorMsg, diag }) {
+      const { useState } = React;
       const [qText, setQText] = useState('');
       const [options, setOptions] = useState(['', '']);
       const addOption = () => setOptions([...options, '']);
@@ -339,7 +354,7 @@
       return (
         <div className="min-h-screen p-4 md:p-8 fade-in">
           <div className="max-w-5xl mx-auto space-y-6">
-            <Card>
+            <div className="bg-white p-8 rounded-2xl shadow-xl">
               <div className="flex flex-col md:flex-row justify-between gap-4">
                 <div>
                   <h2 className="text-xl font-bold text-blue-900">Panel de Profesor</h2>
@@ -356,12 +371,11 @@
                   <button onClick={onExit} className="text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg">Salir</button>
                 </div>
               </div>
-
               <ErrorPanel errorMsg={errorMsg} diag={diag} />
-            </Card>
+            </div>
 
             <div className="grid md:grid-cols-2 gap-6">
-              <Card>
+              <div className="bg-white p-8 rounded-2xl shadow-xl">
                 <h3 className="text-lg font-semibold mb-4">Nueva Pregunta</h3>
                 <div className="space-y-3">
                   <textarea value={qText} onChange={e=>setQText(e.target.value)} placeholder="Escribe tu pregunta..." className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 h-24"></textarea>
@@ -379,9 +393,9 @@
                   </div>
                   <button onClick={handleSend} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold mt-2">Lanzar a la Clase</button>
                 </div>
-              </Card>
+              </div>
 
-              <Card>
+              <div className="bg-white p-8 rounded-2xl shadow-xl">
                 <h3 className="text-lg font-semibold mb-4">Resultados en Vivo</h3>
                 {!currentQuestion ? (
                   <div className="text-gray-400 py-12 text-center">Esperando primera pregunta…</div>
@@ -391,7 +405,8 @@
                     <div className="space-y-3">
                       {currentQuestion.options.map((opt, idx)=>{
                         const count = Object.values(liveAnswers).filter(a => a === idx).length;
-                        const pct = totalAnswers>0 ? Math.round((count/totalAnswers)*100) : 0;
+                        const total = Object.keys(liveAnswers).length;
+                        const pct = total>0 ? Math.round((count/total)*100) : 0;
                         return (
                           <div key={idx}>
                             <div className="flex justify-between text-sm mb-1">
@@ -407,14 +422,13 @@
                     </div>
                   </div>
                 )}
-              </Card>
+              </div>
             </div>
           </div>
         </div>
       );
     }
 
-    // --- Student ---
     function StudentView({ status, errorMsg, activeQuestion, myAnswer, onSendAnswer, onExit, diag }) {
       const waiting = (status === 'connecting' || (status === 'connected-to-host' && !activeQuestion));
       if (waiting) {
@@ -423,7 +437,15 @@
             <div className="w-20 h-20 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mx-auto animate-bounce">⏳</div>
             <h2 className="text-2xl font-bold text-gray-700 mt-4">¡Estás dentro!</h2>
             <p className="text-gray-500">Espera a que el profesor lance la primera pregunta.</p>
-            <ErrorPanel errorMsg={errorMsg} diag={diag} />
+            {(errorMsg || diag) && (
+              <div className="mt-4 w-full max-w-lg text-left">
+                <div className="bg-gray-50 text-gray-700 p-3 rounded-lg text-xs">
+                  <details>
+                    <summary className="cursor-pointer font-medium">Detalles técnicos</summary>
+                    <pre className="whitespace-pre-wrap mt-2">{(errorMsg?('ERROR: '+errorMsg+'\n\n'):'') + (diag||'')}</pre>
+                  </details>
+                </div>
+            </div>)}
             <button onClick={onExit} className="mt-6 text-gray-400 underline text-sm">Salir</button>
           </div>
         );
@@ -442,9 +464,7 @@
           <div className="w-full max-w-lg bg-white p-6 md:p-8 rounded-2xl shadow-xl">
             <div className="mb-8">
               <span className="text-xs font-bold text-blue-600 tracking-widest uppercase">Pregunta Actual</span>
-              <h2 className="text-xl md:text-2xl font-bold text-gray-900 mt-2 leading-tight">
-                {activeQuestion.text}
-              </h2>
+              <h2 className="text-xl md:text-2xl font-bold text-gray-900 mt-2 leading-tight">{activeQuestion.text}</h2>
             </div>
 
             <div className="space-y-3">
