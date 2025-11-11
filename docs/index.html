@@ -1,555 +1,487 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <title>Quiz P2P de Clase</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Quiz P2P de Clase</title>
 
-    <!-- React + Babel + Tailwind -->
-    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React + Babel + Tailwind -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- PeerJS para WebRTC simplificado -->
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <!-- PeerJS -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
-    <!-- Lucide Icons (opcional, usamos SVG inline) -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- (Opcional) Iconos -->
+  <script src="https://unpkg.com/lucide@latest"></script>
 
-    <!-- Fuente -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Fuente -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-    <style>
-        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
-        .fade-in { animation: fadeIn 0.3s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    </style>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+    .fade-in { animation: fadeIn 0.3s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  </style>
 </head>
 <body>
-    <div id="root"></div>
+  <div id="root"></div>
 
-    <!-- IMPORTANTE: añadir data-presets="env,react" -->
-    <script type="text/babel" data-presets="env,react">
-        const { useState, useEffect, useRef } = React;
+  <!-- IMPORTANTE: data-presets="env,react" para que compile JSX -->
+  <script type="text/babel" data-presets="env,react">
+    const { useState, useEffect, useRef } = React;
 
-        // Generador de IDs aleatorios cortos para facilitar la entrada manual
-        const generateShortId = () => Math.random().toString(36).substr(2, 6).toUpperCase();
+    const generateShortId = () => Math.random().toString(36).substr(2, 6).toUpperCase();
 
-        // Tipos de mensajes P2P
-        const MSG = {
-            QUESTION: 'QUESTION',
-            ANSWER: 'ANSWER',
-            WELCOME: 'WELCOME' // Para enviar estado inicial a quienes se unen tarde
-        };
+    const MSG = {
+      QUESTION: 'QUESTION',
+      ANSWER: 'ANSWER'
+    };
 
-        function App() {
-            const [role, setRole] = useState(null); // 'host' | 'student' | null
-            const [peerId, setPeerId] = useState('');
-            const [status, setStatus] = useState('idle'); // 'connecting', 'connected', 'error'
-            const [errorMsg, setErrorMsg] = useState('');
+    function App() {
+      const [role, setRole] = useState(null); // 'host' | 'student' | null
+      const [peerId, setPeerId] = useState('');
+      const [status, setStatus] = useState('idle'); // 'connecting', 'connected', 'error', 'connected-to-host'
+      const [errorMsg, setErrorMsg] = useState('');
+      const [diag, setDiag] = useState(''); // texto de diagnóstico visible
 
-            // Referencias a objetos PeerJS (no queremos re-renderizar al cambiar estos)
-            const peerRef = useRef(null);
-            const connectionsRef = useRef({}); // Para el Host: mapa de peerId -> dataConnection
-            const hostConnRef = useRef(null);  // Para el Estudiante: conexión con el host
+      // PeerJS refs
+      const peerRef = useRef(null);
+      const connectionsRef = useRef({});
+      const hostConnRef = useRef(null);
 
-            // Estado del Quiz (Host)
-            const [studentsCount, setStudentsCount] = useState(0);
-            const [currentQuestion, setCurrentQuestion] = useState(null);
-            const [liveAnswers, setLiveAnswers] = useState({}); // { studentPeerId: answerIndex }
+      // Estado host
+      const [studentsCount, setStudentsCount] = useState(0);
+      const [currentQuestion, setCurrentQuestion] = useState(null);
+      const [liveAnswers, setLiveAnswers] = useState({});
 
-            // Estado del Quiz (Estudiante)
-            const [activeQuestion, setActiveQuestion] = useState(null);
-            const [myAnswer, setMyAnswer] = useState(null);
+      // Estado alumno
+      const [activeQuestion, setActiveQuestion] = useState(null);
+      const [myAnswer, setMyAnswer] = useState(null);
 
-            useEffect(() => {
-                return () => {
-                    if (peerRef.current) peerRef.current.destroy();
-                };
-            }, []);
+      useEffect(() => () => { if (peerRef.current) peerRef.current.destroy(); }, []);
 
-            // === CONFIG COMÚN DE PEERJS (usa servidor público) ===
-            const peerConfig = {
-                host: '0.peerjs.com',
-                port: 443,
-                path: '/',
-                secure: true,
-                debug: 1,
-            };
+      // Config explícita de PeerJS (servidor público) + STUN
+      const peerConfig = {
+        host: '0.peerjs.com',
+        port: 443,
+        path: '/',
+        secure: true,
+        debug: 2,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        }
+      };
 
-            const initializePeer = (id = null) => {
-                setStatus('connecting');
-                const peer = new Peer(id, peerConfig);
+      const setDiagLine = (line) => setDiag(prev => (prev ? prev + '\n' + line : line));
 
-                peer.on('open', (id) => {
-                    setPeerId(id);
-                    setStatus('connected');
-                    console.log('Mi Peer ID es: ' + id);
-                });
+      const initializePeer = (id = null) => {
+        setStatus('connecting');
+        setErrorMsg('');
+        setDiag('');
+        const peer = new Peer(id, peerConfig);
 
-                peer.on('error', (err) => {
-                    console.error('Peer error:', err);
-                    setStatus('error');
-                    if (err.type === 'peer-unavailable') {
-                        setErrorMsg('No se encontró la sala del profesor. Verifica el ID.');
-                    } else if (err.type === 'unavailable-id') {
-                        setErrorMsg('El ID ya está en uso. Recarga para obtener otro.');
-                    } else {
-                        setErrorMsg('Error de conexión: ' + err.type);
-                    }
-                });
+        peer.on('open', (id) => {
+          setPeerId(id);
+          setStatus('connected');
+          setDiagLine('Peer abierto con ID: ' + id);
+        });
 
-                peerRef.current = peer;
-                return peer;
-            };
+        peer.on('disconnected', () => {
+          setDiagLine('Peer desconectado. Reintentando...');
+          try { peer.reconnect(); } catch {}
+        });
 
-            // --- Lógica del Profesor (HOST) ---
-            const startHosting = () => {
-                const id = generateShortId();
-                const peer = initializePeer(id);
-                setRole('host');
+        peer.on('close', () => {
+          setDiagLine('Peer cerrado.');
+        });
 
-                peer.on('connection', (conn) => {
-                    console.log('Estudiante conectado:', conn.peer);
+        peer.on('error', (err) => {
+          console.error('Peer error:', err);
+          setStatus('error');
+          const msg = humanizePeerError(err);
+          setErrorMsg(msg);
+          setDiagLine('ERROR: ' + (err?.type || '') + ' ' + (err?.message || err?.toString?.() || ''));
+        });
 
-                    conn.on('open', () => {
-                        connectionsRef.current[conn.peer] = conn;
-                        setStudentsCount(Object.keys(connectionsRef.current).length);
+        peerRef.current = peer;
+        return peer;
+      };
 
-                        // Si hay una pregunta activa, enviársela al que acaba de llegar
-                        if (currentQuestionRef.current) {
-                            conn.send({
-                                type: MSG.QUESTION,
-                                payload: currentQuestionRef.current
-                            });
-                        }
-                    });
+      const humanizePeerError = (err) => {
+        if (!err) return 'Error desconocido de conexión.';
+        if (err.type === 'unavailable-id') return 'El ID ya está en uso. Vuelve a crear la sala.';
+        if (err.type === 'peer-unavailable') return 'No se encontró la sala del profesor. Verifica el ID.';
+        if (String(err).includes('Lost connection to server') || err.type === 'server-error')
+          return 'No se puede contactar con el servidor de conexión. Es posible que la red del campus lo bloquee.';
+        return 'Error de conexión: ' + (err.type || err.message || String(err));
+      };
 
-                    conn.on('data', (data) => {
-                        if (data.type === MSG.ANSWER) {
-                            handleStudentAnswer(conn.peer, data.payload);
-                        }
-                    });
+      // --- Host ---
+      const currentQuestionRef = useRef(null);
+      useEffect(() => { currentQuestionRef.current = currentQuestion; }, [currentQuestion]);
 
-                    conn.on('close', () => {
-                        console.log('Estudiante desconectado:', conn.peer);
-                        delete connectionsRef.current[conn.peer];
-                        setStudentsCount(Object.keys(connectionsRef.current).length);
-                    });
-                });
-            };
+      const startHosting = () => {
+        const id = generateShortId();
+        const peer = initializePeer(id);
+        setRole('host');
 
-            // Usamos ref para currentQuestion para acceso inmediato en callbacks
-            const currentQuestionRef = useRef(null);
-            useEffect(() => {
-                currentQuestionRef.current = currentQuestion;
-            }, [currentQuestion]);
-
-            const broadcastQuestion = (questionData) => {
-                setCurrentQuestion(questionData);
-                setLiveAnswers({});
-                const msg = { type: MSG.QUESTION, payload: questionData };
-
-                Object.values(connectionsRef.current).forEach(conn => {
-                    if (conn.open) conn.send(msg);
-                });
-            };
-
-            const handleStudentAnswer = (studentId, answerIndex) => {
-                setLiveAnswers(prev => ({
-                    ...prev,
-                    [studentId]: answerIndex
-                }));
-            };
-
-            const stopHosting = () => {
-                if (peerRef.current) peerRef.current.destroy();
-                setRole(null);
-                setLiveAnswers({});
-                setCurrentQuestion(null);
-                setStudentsCount(0);
-            };
-
-            // --- Lógica del Estudiante ---
-            const joinSession = (hostId) => {
-                if (!hostId) return;
-                setRole('student');
-
-                // Estudiante usa ID automático con la misma config
-                const peer = initializePeer();
-
-                peer.on('open', () => {
-                    const conn = peer.connect(hostId.toUpperCase(), { reliable: true });
-
-                    conn.on('open', () => {
-                        console.log("Conectado al profesor!");
-                        setStatus('connected-to-host');
-                        hostConnRef.current = conn;
-                    });
-
-                    conn.on('data', (data) => {
-                        console.log("Datos recibidos del profesor:", data);
-                        if (data.type === MSG.QUESTION) {
-                            setActiveQuestion(data.payload);
-                            setMyAnswer(null);
-                        }
-                    });
-
-                    conn.on('close', () => {
-                        alert("El profesor ha cerrado la sesión.");
-                        setStatus('idle');
-                        setRole(null);
-                    });
-
-                    conn.on('error', (err) => {
-                        console.error("Error en conexión con host:", err);
-                        setErrorMsg("Error conectando con la sala.");
-                    });
-                });
-            };
-
-            const sendAnswer = (index) => {
-                if (hostConnRef.current && hostConnRef.current.open) {
-                    hostConnRef.current.send({ type: MSG.ANSWER, payload: index });
-                    setMyAnswer(index);
-                }
-            };
-
-            const leaveSession = () => {
-                if (peerRef.current) peerRef.current.destroy();
-                setRole(null);
-                setActiveQuestion(null);
-            };
-
-            // --- RENDERIZADO ---
-
-            if (role === 'host') {
-                return <HostView
-                    peerId={peerId}
-                    status={status}
-                    studentsCount={studentsCount}
-                    onBroadcast={broadcastQuestion}
-                    currentQuestion={currentQuestion}
-                    liveAnswers={liveAnswers}
-                    onExit={stopHosting}
-                />;
+        peer.on('connection', (conn) => {
+          setDiagLine('Alumno intentó conectar: ' + conn.peer);
+          conn.on('open', () => {
+            connectionsRef.current[conn.peer] = conn;
+            setStudentsCount(Object.keys(connectionsRef.current).length);
+            if (currentQuestionRef.current) {
+              conn.send({ type: MSG.QUESTION, payload: currentQuestionRef.current });
             }
+          });
+          conn.on('data', (data) => {
+            if (data.type === MSG.ANSWER) handleStudentAnswer(conn.peer, data.payload);
+          });
+          conn.on('close', () => {
+            delete connectionsRef.current[conn.peer];
+            setStudentsCount(Object.keys(connectionsRef.current).length);
+          });
+          conn.on('error', (e) => setDiagLine('Error en conexión alumno: ' + (e?.message || e)));
+        });
+      };
 
-            if (role === 'student') {
-                return <StudentView
-                    status={status}
-                    errorMsg={errorMsg}
-                    activeQuestion={activeQuestion}
-                    myAnswer={myAnswer}
-                    onSendAnswer={sendAnswer}
-                    onExit={leaveSession}
-                />;
+      const broadcastQuestion = (questionData) => {
+        setCurrentQuestion(questionData);
+        setLiveAnswers({});
+        const msg = { type: MSG.QUESTION, payload: questionData };
+        Object.values(connectionsRef.current).forEach(conn => { if (conn.open) conn.send(msg); });
+      };
+
+      const handleStudentAnswer = (studentId, answerIndex) => {
+        setLiveAnswers(prev => ({ ...prev, [studentId]: answerIndex }));
+      };
+
+      const stopHosting = () => {
+        if (peerRef.current) peerRef.current.destroy();
+        setRole(null);
+        setLiveAnswers({});
+        setCurrentQuestion(null);
+        setStudentsCount(0);
+        setPeerId('');
+        setStatus('idle');
+      };
+
+      // --- Alumno ---
+      const joinSession = (hostId) => {
+        if (!hostId) return;
+        setRole('student');
+        const peer = initializePeer(); // id automático
+        peer.on('open', () => {
+          const conn = peer.connect(hostId.toUpperCase(), { reliable: true });
+          conn.on('open', () => {
+            setStatus('connected-to-host');
+            hostConnRef.current = conn;
+            setDiagLine('Alumno conectado al host.');
+          });
+          conn.on('data', (data) => {
+            if (data.type === MSG.QUESTION) {
+              setActiveQuestion(data.payload);
+              setMyAnswer(null);
             }
+          });
+          conn.on('close', () => {
+            alert('El profesor ha cerrado la sesión.');
+            setStatus('idle');
+            setRole(null);
+            setActiveQuestion(null);
+          });
+          conn.on('error', (e) => {
+            setErrorMsg('Error conectando con la sala.');
+            setDiagLine('Error data-conn alumno: ' + (e?.message || e));
+          });
+        });
+      };
 
-            return <LandingView onHost={startHosting} onJoin={joinSession} status={status} errorMsg={errorMsg} />;
+      const sendAnswer = (index) => {
+        if (hostConnRef.current && hostConnRef.current.open) {
+          hostConnRef.current.send({ type: MSG.ANSWER, payload: index });
+          setMyAnswer(index);
         }
+      };
 
-        // --- VISTA INICIAL ---
-        function LandingView({ onHost, onJoin, status, errorMsg }) {
-            const [joinId, setJoinId] = useState('');
+      const leaveSession = () => {
+        if (peerRef.current) peerRef.current.destroy();
+        setRole(null);
+        setActiveQuestion(null);
+        setStatus('idle');
+        setPeerId('');
+      };
 
-            return (
-                <div className="min-h-screen flex items-center justify-center p-4 fade-in">
-                    <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full">
-                        <h1 className="text-3xl font-bold text-gray-800 mb-6 text-center text-blue-600">
-                            🎓 Aula Quiz P2P
-                        </h1>
-                        <p className="text-gray-500 text-center mb-8">
-                            Herramienta de preguntas en vivo sin servidor.
-                        </p>
+      // --- UI ---
+      if (role === 'host') {
+        return (
+          <HostView
+            peerId={peerId}
+            status={status}
+            studentsCount={studentsCount}
+            onBroadcast={broadcastQuestion}
+            currentQuestion={currentQuestion}
+            liveAnswers={liveAnswers}
+            onExit={stopHosting}
+            errorMsg={errorMsg}
+            diag={diag}
+          />
+        );
+      }
+      if (role === 'student') {
+        return (
+          <StudentView
+            status={status}
+            errorMsg={errorMsg}
+            activeQuestion={activeQuestion}
+            myAnswer={myAnswer}
+            onSendAnswer={sendAnswer}
+            onExit={leaveSession}
+            diag={diag}
+          />
+        );
+      }
+      return <LandingView onHost={startHosting} onJoin={joinSession} status={status} errorMsg={errorMsg} diag={diag} />;
+    }
 
-                        {status === 'connecting' && (
-                            <div className="text-center text-blue-500 mb-4 animate-pulse">Conectando a la red...</div>
-                        )}
-                        {errorMsg && (
-                            <div className="bg-red-50 text-red-600 p-3 rounded-lg mb-4 text-sm text-center">
-                                {errorMsg}
-                            </div>
-                        )}
+    function Card({children}) {
+      return <div className="bg-white p-8 rounded-2xl shadow-xl max-w-3xl w-full">{children}</div>;
+    }
 
-                        <div className="space-y-4">
-                            <button
-                                onClick={onHost}
-                                disabled={status === 'connecting'}
-                                className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-presentation"><path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="m7 21 5-5 5 5"/></svg>
-                                Soy Profesor (Crear Sala)
-                            </button>
+    function ErrorPanel({errorMsg, diag}) {
+      if (!errorMsg && !diag) return null;
+      return (
+        <div className="mt-4 space-y-2">
+          {errorMsg && <div className="bg-red-50 text-red-700 p-3 rounded-lg text-sm">{errorMsg}</div>}
+          {diag && (
+            <details className="bg-gray-50 text-gray-700 p-3 rounded-lg text-xs">
+              <summary className="cursor-pointer font-medium">Detalles técnicos</summary>
+              <pre className="whitespace-pre-wrap mt-2">{diag}</pre>
+            </details>
+          )}
+        </div>
+      );
+    }
 
-                            <div className="relative flex py-3 items-center">
-                                <div className="flex-grow border-t border-gray-200"></div>
-                                <span className="flex-shrink mx-4 text-gray-400">o</span>
-                                <div className="flex-grow border-t border-gray-200"></div>
-                            </div>
+    // --- Landing ---
+    function LandingView({ onHost, onJoin, status, errorMsg, diag }) {
+      const [joinId, setJoinId] = useState('');
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4 fade-in">
+          <Card>
+            <h1 className="text-3xl font-bold text-blue-600 text-center mb-6">🎓 Aula Quiz P2P</h1>
+            <p className="text-gray-500 text-center mb-6">Herramienta de preguntas en vivo sin servidor.</p>
 
-                            <div className="bg-gray-50 p-4 rounded-xl">
-                                <label className="block text-sm font-medium text-gray-700 mb-2">ID de Sala del Profesor</label>
-                                <div className="flex gap-2">
-                                    <input
-                                        type="text"
-                                        value={joinId}
-                                        onChange={(e) => setJoinId(e.target.value.toUpperCase())}
-                                        placeholder="EJ: XY7Z99"
-                                        className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono uppercase"
-                                        maxLength={6}
-                                    />
-                                    <button
-                                        onClick={() => onJoin(joinId)}
-                                        disabled={status === 'connecting' || joinId.length < 4}
-                                        className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                                    >
-                                        Entrar
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+            {status === 'connecting' && <div className="text-center text-blue-500 mb-4 animate-pulse">Conectando a la red…</div>}
+
+            <div className="space-y-4">
+              <button
+                onClick={onHost}
+                disabled={status === 'connecting'}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-lg transition-all disabled:opacity-50"
+              >
+                Soy Profesor (Crear Sala)
+              </button>
+
+              <div className="relative flex py-3 items-center">
+                <div className="flex-grow border-t border-gray-200"></div>
+                <span className="mx-4 text-gray-400">o</span>
+                <div className="flex-grow border-t border-gray-200"></div>
+              </div>
+
+              <div className="bg-gray-50 p-4 rounded-xl">
+                <label className="block text-sm font-medium text-gray-700 mb-2">ID de Sala del Profesor</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={joinId}
+                    onChange={(e) => setJoinId(e.target.value.toUpperCase())}
+                    placeholder="EJ: XY7Z99"
+                    className="flex-1 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono uppercase"
+                    maxLength={6}
+                  />
+                  <button
+                    onClick={() => onJoin(joinId)}
+                    disabled={status === 'connecting' || joinId.length < 4}
+                    className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-all disabled:opacity-50"
+                  >
+                    Entrar
+                  </button>
                 </div>
-            );
-        }
+              </div>
+            </div>
 
-        // --- VISTA PROFESOR ---
-        function HostView({ peerId, status, studentsCount, onBroadcast, currentQuestion, liveAnswers, onExit }) {
-            const [qText, setQText] = useState('');
-            const [options, setOptions] = useState(['', '']);
+            <ErrorPanel errorMsg={errorMsg} diag={diag} />
+          </Card>
+        </div>
+      );
+    }
 
-            const addOption = () => setOptions([...options, '']);
-            const updateOption = (idx, val) => {
-                const newOpts = [...options];
-                newOpts[idx] = val;
-                setOptions(newOpts);
-            };
-            const removeOption = (idx) => {
-                setOptions(options.filter((_, i) => i !== idx));
-            };
+    // --- Host ---
+    function HostView({ peerId, status, studentsCount, onBroadcast, currentQuestion, liveAnswers, onExit, errorMsg, diag }) {
+      const [qText, setQText] = useState('');
+      const [options, setOptions] = useState(['', '']);
+      const addOption = () => setOptions([...options, '']);
+      const updateOption = (i, v) => { const n=[...options]; n[i]=v; setOptions(n); };
+      const removeOption = (i) => setOptions(options.filter((_, idx) => idx !== i));
+      const handleSend = () => {
+        if (!qText.trim() || options.some(o => !o.trim())) { alert('Completa la pregunta y todas las opciones.'); return; }
+        onBroadcast({ id: Date.now(), text: qText, options: options.filter(o => o.trim() !== '') });
+      };
+      const totalAnswers = Object.keys(liveAnswers).length;
 
-            const handleSend = () => {
-                if (!qText.trim() || options.some(o => !o.trim())) {
-                    alert("Completa la pregunta y todas las opciones.");
-                    return;
-                }
-                onBroadcast({
-                    id: Date.now(),
-                    text: qText,
-                    options: options.filter(o => o.trim() !== '')
-                });
-            };
-
-            const totalAnswers = Object.keys(liveAnswers).length;
-            const results = currentQuestion?.options.map((_, idx) => {
-                const count = Object.values(liveAnswers).filter(a => a === idx).length;
-                return { count, percentage: totalAnswers > 0 ? Math.round((count / totalAnswers) * 100) : 0 };
-            }) || [];
-
-            return (
-                <div className="min-h-screen bg-gray-100 p-4 md:p-8 fade-in">
-                    <div className="max-w-4xl mx-auto">
-                        <div className="bg-white rounded-2xl shadow-sm p-4 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div>
-                                <h2 className="text-xl font-bold text-blue-900 flex items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-monitor-smartphone"><path d="M18 8v6a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M8 18v-1a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v-1"/><path d="M22 19v1a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M14 22h8"/></svg>
-                                    Panel de Profesor
-                                </h2>
-                                <div className="mt-1 flex items-center gap-2">
-                                    <span className="text-gray-500">ID de Sala:</span>
-                                    {status === 'connected' ? (
-                                        <span className="bg-blue-100 text-blue-800 text-2xl font-mono font-bold px-3 py-1 rounded-lg tracking-widest select-all">
-                                            {peerId}
-                                        </span>
-                                    ) : (
-                                        <span className="animate-pulse text-gray-400">Generando...</span>
-                                    )}
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                                <div className="flex items-center gap-2 bg-green-50 text-green-700 px-4 py-2 rounded-full font-medium">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-users"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                                    {studentsCount} alumnos
-                                </div>
-                                <button onClick={onExit} className="text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors">
-                                    Salir
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="grid md:grid-cols-2 gap-6">
-                            <div className="bg-white rounded-2xl shadow p-6">
-                                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-pencil-line"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/><path d="m15 5 3 3"/></svg>
-                                    Nueva Pregunta
-                                </h3>
-                                <div className="space-y-3">
-                                    <textarea
-                                        value={qText}
-                                        onChange={e => setQText(e.target.value)}
-                                        placeholder="Escribe tu pregunta aquí..."
-                                        className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none resize-none h-24"
-                                    ></textarea>
-                                    <div className="space-y-2">
-                                        {options.map((opt, idx) => (
-                                            <div key={idx} className="flex gap-2 items-center">
-                                                <span className="text-gray-400 font-mono">{String.fromCharCode(65 + idx)}.</span>
-                                                <input
-                                                    type="text"
-                                                    value={opt}
-                                                    onChange={e => updateOption(idx, e.target.value)}
-                                                    placeholder={`Opción ${idx + 1}`}
-                                                    className="flex-1 p-2 border rounded-md focus:ring-1 focus:ring-blue-500 outline-none"
-                                                />
-                                                {options.length > 2 && (
-                                                    <button onClick={() => removeOption(idx)} className="text-gray-400 hover:text-red-500">
-                                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    <div className="flex gap-2 pt-2">
-                                        <button onClick={addOption} className="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center gap-1">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-plus"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-                                            Añadir Opción
-                                        </button>
-                                    </div>
-                                    <button
-                                        onClick={handleSend}
-                                        className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold mt-4 flex items-center justify-center gap-2 transition-colors"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-send"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
-                                        Lanzar a la Clase
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="bg-white rounded-2xl shadow p-6">
-                                <h3 className="text-lg font-semibold mb-4 flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-bar-chart-3"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
-                                        Resultados en Vivo
-                                    </div>
-                                    {currentQuestion && (
-                                        <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded-md">
-                                            Respuestas: {Object.keys(liveAnswers).length}/{studentsCount}
-                                        </span>
-                                    )}
-                                </h3>
-
-                                {!currentQuestion ? (
-                                    <div className="h-full flex flex-col items-center justify-center text-gray-400 py-12">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-inbox"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>
-                                        <p className="mt-2">Esperando primera pregunta...</p>
-                                    </div>
-                                ) : (
-                                    <div className="space-y-6">
-                                        <p className="font-medium text-gray-800">{currentQuestion.text}</p>
-                                        <div className="space-y-3">
-                                            {currentQuestion.options.map((opt, idx) => {
-                                                const totalAnswers = Object.keys(liveAnswers).length;
-                                                const count = Object.values(liveAnswers).filter(a => a === idx).length;
-                                                const percentage = totalAnswers > 0 ? Math.round((count / totalAnswers) * 100) : 0;
-                                                return (
-                                                    <div key={idx} className="relative">
-                                                        <div className="flex justify-between text-sm mb-1">
-                                                            <span>{String.fromCharCode(65 + idx)}. {opt}</span>
-                                                            <span className="font-semibold">{count}</span>
-                                                        </div>
-                                                        <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                                                            <div className="h-full bg-blue-500 transition-all duration-500 ease-out" style={{ width: `${percentage}%` }}></div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+      return (
+        <div className="min-h-screen p-4 md:p-8 fade-in">
+          <div className="max-w-5xl mx-auto space-y-6">
+            <Card>
+              <div className="flex flex-col md:flex-row justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-blue-900">Panel de Profesor</h2>
+                  <div className="mt-1 flex items-center gap-2">
+                    <span className="text-gray-500">ID de Sala:</span>
+                    {status === 'connected'
+                      ? <span className="bg-blue-100 text-blue-800 text-2xl font-mono font-bold px-3 py-1 rounded-lg tracking-widest select-all">{peerId}</span>
+                      : <span className="animate-pulse text-gray-400">Generando…</span>}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">Comparte este ID con tus alumnos.</p>
                 </div>
-            );
-        }
+                <div className="flex items-center gap-4">
+                  <div className="bg-green-50 text-green-700 px-4 py-2 rounded-full font-medium">{studentsCount} alumnos</div>
+                  <button onClick={onExit} className="text-red-500 hover:bg-red-50 px-3 py-2 rounded-lg">Salir</button>
+                </div>
+              </div>
 
-        // --- VISTA ESTUDIANTE ---
-        function StudentView({ status, errorMsg, activeQuestion, myAnswer, onSendAnswer, onExit }) {
-            if (status === 'connecting' || (status === 'connected-to-host' && !activeQuestion)) {
+              <ErrorPanel errorMsg={errorMsg} diag={diag} />
+            </Card>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              <Card>
+                <h3 className="text-lg font-semibold mb-4">Nueva Pregunta</h3>
+                <div className="space-y-3">
+                  <textarea value={qText} onChange={e=>setQText(e.target.value)} placeholder="Escribe tu pregunta..." className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 h-24"></textarea>
+                  <div className="space-y-2">
+                    {options.map((opt, idx)=>(
+                      <div key={idx} className="flex gap-2 items-center">
+                        <span className="text-gray-400 font-mono">{String.fromCharCode(65+idx)}.</span>
+                        <input value={opt} onChange={e=>updateOption(idx,e.target.value)} className="flex-1 p-2 border rounded-md focus:ring-1 focus:ring-blue-500" placeholder={`Opción ${idx+1}`} />
+                        {options.length>2 && <button onClick={()=>removeOption(idx)} className="text-gray-400 hover:text-red-500">✕</button>}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 pt-2">
+                    <button onClick={addOption} className="px-3 py-1.5 text-sm text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg">Añadir Opción</button>
+                  </div>
+                  <button onClick={handleSend} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold mt-2">Lanzar a la Clase</button>
+                </div>
+              </Card>
+
+              <Card>
+                <h3 className="text-lg font-semibold mb-4">Resultados en Vivo</h3>
+                {!currentQuestion ? (
+                  <div className="text-gray-400 py-12 text-center">Esperando primera pregunta…</div>
+                ) : (
+                  <div className="space-y-6">
+                    <p className="font-medium text-gray-800">{currentQuestion.text}</p>
+                    <div className="space-y-3">
+                      {currentQuestion.options.map((opt, idx)=>{
+                        const count = Object.values(liveAnswers).filter(a => a === idx).length;
+                        const pct = totalAnswers>0 ? Math.round((count/totalAnswers)*100) : 0;
+                        return (
+                          <div key={idx}>
+                            <div className="flex justify-between text-sm mb-1">
+                              <span>{String.fromCharCode(65+idx)}. {opt}</span>
+                              <span className="font-semibold">{count}</span>
+                            </div>
+                            <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                              <div className="h-full bg-blue-500 transition-all" style={{width: `${pct}%`}}></div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // --- Student ---
+    function StudentView({ status, errorMsg, activeQuestion, myAnswer, onSendAnswer, onExit, diag }) {
+      const waiting = (status === 'connecting' || (status === 'connected-to-host' && !activeQuestion));
+      if (waiting) {
+        return (
+          <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center fade-in">
+            <div className="w-20 h-20 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mx-auto animate-bounce">⏳</div>
+            <h2 className="text-2xl font-bold text-gray-700 mt-4">¡Estás dentro!</h2>
+            <p className="text-gray-500">Espera a que el profesor lance la primera pregunta.</p>
+            <ErrorPanel errorMsg={errorMsg} diag={diag} />
+            <button onClick={onExit} className="mt-6 text-gray-400 underline text-sm">Salir</button>
+          </div>
+        );
+      }
+
+      if (!activeQuestion) {
+        return (
+          <div className="min-h-screen flex items-center justify-center p-6">
+            <div className="text-gray-500">Conectado. Esperando pregunta…</div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-gray-100 p-4 flex items-center justify-center fade-in">
+          <div className="w-full max-w-lg bg-white p-6 md:p-8 rounded-2xl shadow-xl">
+            <div className="mb-8">
+              <span className="text-xs font-bold text-blue-600 tracking-widest uppercase">Pregunta Actual</span>
+              <h2 className="text-xl md:text-2xl font-bold text-gray-900 mt-2 leading-tight">
+                {activeQuestion.text}
+              </h2>
+            </div>
+
+            <div className="space-y-3">
+              {activeQuestion.options.map((opt, idx) => {
+                const isSelected = myAnswer === idx;
                 return (
-                    <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center fade-in">
-                        {status === 'connecting' ? (
-                            <div className="text-blue-500 animate-pulse text-xl">Conectando con el aula...</div>
-                        ) : (
-                            <div className="space-y-4">
-                                <div className="w-20 h-20 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mx-auto animate-bounce">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-hourglass"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>
-                                </div>
-                                <h2 className="text-2xl font-bold text-gray-700">¡Estás dentro!</h2>
-                                <p className="text-gray-500">Mira la pantalla del profesor. La pregunta aparecerá aquí pronto.</p>
-                            </div>
-                        )}
-                        {errorMsg && <p className="text-red-500 mt-4 bg-red-50 p-2 rounded">{errorMsg}</p>}
-                        <button onClick={onExit} className="mt-8 text-gray-400 underline text-sm">Salir</button>
+                  <button
+                    key={idx}
+                    onClick={() => onSendAnswer(idx)}
+                    disabled={myAnswer !== null}
+                    className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-center gap-4
+                      ${isSelected ? 'border-blue-500 bg-blue-50 text-blue-800 font-semibold'
+                                   : myAnswer !== null ? 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed'
+                                                       : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50/50'}
+                    `}
+                  >
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold
+                      ${isSelected ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-500'}`}>
+                      {String.fromCharCode(65 + idx)}
                     </div>
+                    <span className="text-lg">{opt}</span>
+                    {isSelected && <span className="ml-auto">✔</span>}
+                  </button>
                 );
-            }
+              })}
+            </div>
 
-            return (
-                <div className="min-h-screen bg-gray-100 p-4 flex items-center justify-center fade-in">
-                    <div className="w-full max-w-lg bg-white p-6 md:p-8 rounded-2xl shadow-xl">
-                        <div className="mb-8">
-                            <span className="text-xs font-bold text-blue-600 tracking-widest uppercase">Pregunta Actual</span>
-                            <h2 className="text-xl md:text-2xl font-bold text-gray-900 mt-2 leading-tight">
-                                {activeQuestion.text}
-                            </h2>
-                        </div>
+            {myAnswer !== null && (
+              <div className="mt-6 text-center text-green-600 font-medium animate-pulse">Respuesta enviada. ¡Espera la siguiente!</div>
+            )}
+          </div>
+        </div>
+      );
+    }
 
-                        <div className="space-y-3">
-                            {activeQuestion.options.map((opt, idx) => {
-                                const isSelected = myAnswer === idx;
-                                return (
-                                    <button
-                                        key={idx}
-                                        onClick={() => onSendAnswer(idx)}
-                                        disabled={myAnswer !== null}
-                                        className={`w-full text-left p-4 rounded-xl border-2 transition-all duration-200 flex items-center gap-4
-                                            ${isSelected
-                                                ? 'border-blue-500 bg-blue-50 text-blue-800 font-semibold shadow-md'
-                                                : myAnswer !== null
-                                                    ? 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed'
-                                                    : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50/50 active:scale-[0.98]'
-                                            }`}
-                                    >
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 font-bold
-                                            ${isSelected ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-500'}
-                                        `}>
-                                            {String.fromCharCode(65 + idx)}
-                                        </div>
-                                        <span className="text-lg">{opt}</span>
-                                        {isSelected && (
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-check ml-auto text-blue-500"><path d="M20 6 9 17l-5-5"/></svg>
-                                        )}
-                                    </button>
-                                )
-                            })}
-                        </div>
-
-                        {myAnswer !== null && (
-                            <div className="mt-6 text-center text-green-600 font-medium animate-pulse flex items-center justify-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-check-circle-2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
-                                Respuesta enviada. ¡Espera la siguiente!
-                            </div>
-                        )}
-                    </div>
-                </div>
-            );
-        }
-
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
-    </script>
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
 </body>
 </html>
