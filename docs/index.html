@@ -88,7 +88,7 @@
         }
       };
 
-      const log = (m) => setDiag(p => (p ? p + "\\n" + m : m));
+      const log = (m) => setDiag(p => (p ? p + "\n" + m : m));
       const niceErr = (e) => {
         if (!e) return 'Error desconocido de conexión.';
         if (e.type === 'unavailable-id') return 'El ID ya está en uso. Vuelve a crear la sala.';
@@ -209,6 +209,7 @@
     }
 
     function HostView({ status, peerId, students, currentQuestion, liveAnswers, onSend, onExit, errorMsg, diag }) {
+      const { useState } = React;
       const [text, setText] = useState('');
       const [opts, setOpts] = useState(['','']);
       const updateOpt = (i,v)=>{ const n=[...opts]; n[i]=v; setOpts(n); };
@@ -267,8 +268,9 @@
                           <div>{String.fromCharCode(65+idx)}. {opt}</div>
                           <div><b>{count}</b> ({pct}%)</div>
                         </div>
-                        <div style="height:8px;background:#eee;border-radius:6px;overflow:hidden;">
-                          <div style={{height:'8px',width:pct+'%',background:'#2563eb'}}></div>
+                        <!-- ¡ARREGLO AQUÍ!: style como OBJETO, no cadena -->
+                        <div style={{height:'8px', background:'#eee', borderRadius:'6px', overflow:'hidden'}}>
+                          <div style={{height:'8px', width:pct+'%', background:'#2563eb'}}></div>
                         </div>
                       </div>
                     );
@@ -308,10 +310,10 @@
             <div style={{fontWeight:700, margin:'6px 0'}}>{question.text}</div>
             <div className="list">
               {question.options.map((opt, idx) => {
-                const selected = myAnswer === idx;
+                const isSelected = myAnswer === idx;
                 return (
                   <div key={idx} className="row">
-                    <button onClick={()=>onAnswer(idx)} disabled={myAnswer!==null} style={{background:selected?'#1d4ed8':'#2563eb'}}>
+                    <button onClick={()=>onAnswer(idx)} disabled={myAnswer!==null} style={{background:isSelected?'#1d4ed8':'#2563eb'}}>
                       {String.fromCharCode(65+idx)}
                     </button>
                     <div className="small" style={{fontSize:'16px'}}>{opt}</div>
